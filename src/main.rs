@@ -11,7 +11,7 @@ use ratatui::{
     Terminal,
 };
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -30,6 +30,7 @@ struct AppState {
     locale_section_expanded: bool,
     current_layout: String,
     current_locale: String,
+    should_quit: bool,
 }
 
 impl AppState {
@@ -42,6 +43,7 @@ impl AppState {
             locale_section_expanded: true,
             current_layout: String::new(),
             current_locale: String::new(),
+            should_quit: false,
         }
     }
 
@@ -52,7 +54,6 @@ impl AppState {
 
     fn build_menu(&mut self) {
         self.menu_items.clear();
-
         let available_locales = get_available_locales();
         let available_keyboard_layouts = get_available_keyboard_layouts();
 
@@ -122,14 +123,12 @@ impl AppState {
     fn adjust_scroll(&mut self) {
         // Calculate visible area (items that can fit in the menu area)
         let visible_items = 10; // Conservative estimate, will be adjusted in render
-
         // Keep selected item visible
         if self.selected < self.scroll_offset {
             self.scroll_offset = self.selected;
         } else if self.selected >= self.scroll_offset + visible_items {
             self.scroll_offset = self.selected.saturating_sub(visible_items - 1);
         }
-
         // Ensure we don't scroll past the end
         let max_scroll = self.menu_items.len().saturating_sub(visible_items);
         self.scroll_offset = self.scroll_offset.min(max_scroll);
@@ -139,14 +138,12 @@ impl AppState {
         if visible_items == 0 {
             return;
         }
-
         // Keep selected item visible
         if self.selected < self.scroll_offset {
             self.scroll_offset = self.selected;
         } else if self.selected >= self.scroll_offset + visible_items {
             self.scroll_offset = self.selected.saturating_sub(visible_items - 1);
         }
-
         // Ensure we don't scroll past the end
         let max_scroll = self.menu_items.len().saturating_sub(visible_items);
         self.scroll_offset = self.scroll_offset.min(max_scroll);
@@ -156,9 +153,7 @@ impl AppState {
         if self.menu_items.is_empty() {
             return;
         }
-
         let item = &self.menu_items[self.selected];
-
         if item.label.contains("Keyboard Layouts") {
             self.keyboard_section_expanded = !self.keyboard_section_expanded;
             self.build_menu();
@@ -187,22 +182,17 @@ impl AppState {
         if self.menu_items.is_empty() {
             return Ok(false);
         }
-
         let item = &self.menu_items[self.selected];
-
         // Check if it's a header (expandable section)
         if item.label.contains("Keyboard Layouts") || item.label.contains("System Locales") {
             self.toggle_section();
             return Ok(false);
         }
-
         // Execute regular action
         let result = (item.action)();
-
         // Refresh status after any action
         self.refresh_status();
         self.build_menu();
-
         result.map(|_| false)
     }
 }
@@ -229,7 +219,6 @@ fn get_current_keyboard_layout() -> String {
             }
         }
     }
-
     // Fallback to setxkbmap
     if let Ok(output) = Command::new("setxkbmap").args(["-query"]).output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
@@ -241,7 +230,6 @@ fn get_current_keyboard_layout() -> String {
             }
         }
     }
-
     "unknown".to_string()
 }
 
@@ -257,7 +245,6 @@ fn get_current_locale() -> String {
             }
         }
     }
-
     // Fallback to localectl
     if let Ok(output) = Command::new("localectl").args(["status"]).output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
@@ -269,7 +256,6 @@ fn get_current_locale() -> String {
             }
         }
     }
-
     // Last resort: check environment variable
     std::env::var("LANG").unwrap_or_else(|_| "unknown".to_string())
 }
@@ -317,24 +303,20 @@ fn locale_to_keyboard_layout(locale_code: &str) -> Option<String> {
     } else {
         return None;
     };
-
     Some(layout_code)
 }
 
 fn get_available_keyboard_layouts() -> Vec<(String, String)> {
     let mut layouts = Vec::new();
     let available_locales = get_available_locales();
-
     for (locale_code, display_name) in available_locales {
         if let Some(layout_code) = locale_to_keyboard_layout(&locale_code) {
             layouts.push((layout_code, display_name));
         }
     }
-
     // Remove duplicates (e.g., if multiple English locales map to "us")
     layouts.sort_by(|a, b| a.0.cmp(&b.0));
     layouts.dedup_by(|a, b| a.0 == b.0);
-
     layouts
 }
 
@@ -342,7 +324,6 @@ fn switch_to_keyboard_layout(layout_code: &str) -> Result<()> {
     let result = Command::new("hyprctl")
         .args(["keyword", "input:kb_layout", layout_code])
         .output();
-
     match result {
         Ok(output) => {
             if output.status.success() {
@@ -363,7 +344,6 @@ fn switch_to_keyboard_layout(layout_code: &str) -> Result<()> {
 
 fn get_available_locales() -> Vec<(String, String)> {
     let mut locales = Vec::new();
-
     if let Ok(output) = Command::new("localectl").args(["list-locales"]).output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
         for line in output_str.lines() {
@@ -375,13 +355,11 @@ fn get_available_locales() -> Vec<(String, String)> {
             }
         }
     }
-
     // If localectl fails, return a minimal fallback
     if locales.is_empty() {
         locales.push(("en_US.UTF-8".to_string(), "English (US)".to_string()));
         locales.push(("C.UTF-8".to_string(), "C (POSIX)".to_string()));
     }
-
     locales
 }
 
@@ -435,7 +413,6 @@ fn set_locale(locale_code: &str) -> Result<()> {
     let result = Command::new("sudo")
         .args(["localectl", "set-locale", &format!("LANG={}", locale_code)])
         .output();
-
     match result {
         Ok(output) => {
             if output.status.success() {
@@ -458,42 +435,70 @@ fn set_locale(locale_code: &str) -> Result<()> {
     }
 }
 
+// Setup signal handlers for graceful shutdown
+fn setup_signal_handlers() -> Arc<AtomicBool> {
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    }).expect("Error setting Ctrl-C handler");
+
+    running
+}
+
+fn cleanup_terminal() -> Result<()> {
+    disable_raw_mode()?;
+    execute!(
+        io::stdout(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
+    // Setup signal handlers
+    let running = setup_signal_handlers();
+
+    // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let res = run_app(&mut terminal);
+    let res = run_app(&mut terminal, running);
 
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    // Cleanup terminal
+    cleanup_terminal()?;
     terminal.show_cursor()?;
 
     res
 }
 
-fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<()> {
+fn run_app<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    running: Arc<AtomicBool>
+) -> Result<()> {
     let mut app_state = AppState::new();
     app_state.refresh_status();
     app_state.build_menu();
 
     loop {
+        // Check if we should quit due to signal
+        if !running.load(Ordering::SeqCst) || app_state.should_quit {
+            break;
+        }
+
         terminal.draw(|f| {
             let size = f.size();
-
             // Main container
             let main_block = Block::default()
                 .borders(Borders::ALL)
                 .title("🌐 Levocale - Locale & Keyboard Switcher")
                 .title_alignment(Alignment::Center)
                 .border_style(Style::default().fg(Color::Cyan));
-
             let inner = main_block.inner(size);
             f.render_widget(main_block, size);
 
@@ -518,12 +523,10 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<(
                 app_state.current_locale,
                 app_state.current_layout
             );
-
             let status_paragraph = Paragraph::new(status_text)
                 .style(Style::default().fg(Color::White))
                 .alignment(Alignment::Center)
                 .block(status_block);
-
             f.render_widget(status_paragraph, chunks[0]);
 
             // Calculate visible area for menu
@@ -547,7 +550,6 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<(
                 .borders(Borders::ALL)
                 .title("📋 Options")
                 .border_style(Style::default().fg(Color::Blue));
-
             let menu_inner = menu_block.inner(chunks[1]);
             f.render_widget(menu_block, chunks[1]);
 
@@ -589,7 +591,6 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<(
                     };
 
                     let content = format!("{}{}\n{}", prefix, item.label, item.description);
-
                     let paragraph = Paragraph::new(content)
                         .style(style);
 
@@ -600,8 +601,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<(
             }
 
             // Scroll indicators and instructions
-            let mut instructions_text = "Controls: ↑/↓ Navigate • Enter Select/Toggle • q/Esc Quit".to_string();
-
+            let mut instructions_text = "Controls: ↑/↓ Navigate • Enter Select/Toggle • q/Esc/Ctrl+C Quit".to_string();
             if app_state.scroll_offset > 0 {
                 instructions_text += " • ⬆ More above";
             }
@@ -613,41 +613,50 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>) -> Result<(
                 .style(Style::default().fg(Color::Gray))
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::TOP));
-
             f.render_widget(instructions, chunks[2]);
         })?;
 
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Up => {
-                    app_state.move_up();
-                }
-                KeyCode::Down => {
-                    app_state.move_down();
-                }
-                KeyCode::Enter | KeyCode::Right => {
-                    let _ = app_state.execute_selected();
-                }
-                KeyCode::Left => {
-                    // Collapse current section if it's expanded
-                    if !app_state.menu_items.is_empty() {
-                        let item = &app_state.menu_items[app_state.selected];
-                        if (item.label.contains("▼ Keyboard") && app_state.keyboard_section_expanded) ||
-                           (item.label.contains("▼ System") && app_state.locale_section_expanded) {
-                            app_state.toggle_section();
+        // Handle events with timeout to check for signals
+        if event::poll(std::time::Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Up => {
+                        app_state.move_up();
+                    }
+                    KeyCode::Down => {
+                        app_state.move_down();
+                    }
+                    KeyCode::Enter | KeyCode::Right => {
+                        let _ = app_state.execute_selected();
+                    }
+                    KeyCode::Left => {
+                        // Collapse current section if it's expanded
+                        if !app_state.menu_items.is_empty() {
+                            let item = &app_state.menu_items[app_state.selected];
+                            if (item.label.contains("▼ Keyboard") && app_state.keyboard_section_expanded) ||
+                               (item.label.contains("▼ System") && app_state.locale_section_expanded) {
+                                app_state.toggle_section();
+                            }
                         }
                     }
+                    KeyCode::Char('q') | KeyCode::Esc => {
+                        app_state.should_quit = true;
+                    }
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app_state.should_quit = true;
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app_state.should_quit = true;
+                    }
+                    KeyCode::Char('r') => {
+                        // Refresh status
+                        app_state.refresh_status();
+                        app_state.build_menu();
+                    }
+                    _ => {}
                 }
-                KeyCode::Char('q') | KeyCode::Esc => break,
-                KeyCode::Char('r') => {
-                    // Refresh status
-                    app_state.refresh_status();
-                    app_state.build_menu();
-                }
-                _ => {}
             }
         }
     }
-
     Ok(())
 }
